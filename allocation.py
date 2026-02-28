@@ -53,7 +53,7 @@ def _erc_weights_long_only(cov: pd.DataFrame, tickers: list) -> np.ndarray:
 
     min  Σ_i Σ_j ( w_i * (Σ w)_i - w_j * (Σ w)_j )^2
 
-    Utilise plusieurs points de départ pour éviter les minima locaux.
+    On utilise l'approche classique d'optimisation numérique.
     """
     n = len(tickers)
     if n == 0:
@@ -74,36 +74,19 @@ def _erc_weights_long_only(cov: pd.DataFrame, tickers: list) -> np.ndarray:
         rc_target = sigma / n
         return np.sum((rc - rc_target) ** 2)
 
+    w0 = np.ones(n) / n
     bounds = [(1e-6, 1.0)] * n
     constraints = {"type": "eq", "fun": lambda w: np.sum(w) - 1.0}
 
-    # Point de départ 1 : inverse de la volatilité (plus naturel pour ERC)
-    vols = np.sqrt(np.diag(cov_sub))
-    vols = np.where(vols > 0, vols, 1e-8)
-    w_invvol = (1.0 / vols)
-    w_invvol = w_invvol / w_invvol.sum()
+    res = minimize(objective, w0, method="SLSQP",
+                   bounds=bounds, constraints=constraints,
+                   options={"maxiter": 500, "ftol": 1e-12})
 
-    # Point de départ 2 : equal weight
-    w_ew = np.ones(n) / n
-
-    best_res = None
-    best_fun = np.inf
-
-    for w0 in [w_invvol, w_ew]:
-        res = minimize(objective, w0, method="SLSQP",
-                       bounds=bounds, constraints=constraints,
-                       options={"maxiter": 1000, "ftol": 1e-15})
-        if res.fun < best_fun:
-            best_fun = res.fun
-            best_res = res
-
-    if best_res is not None and best_fun < 1e10:
-        w_out = best_res.x
-        w_out = np.maximum(w_out, 0)
-        return w_out / w_out.sum()
+    if res.success:
+        return res.x / res.x.sum()  # normalisation sécurité
     else:
-        # fallback : inverse vol (mieux que equal weight)
-        return w_invvol
+        # fallback : equal weight
+        return np.ones(n) / n
 
 
 def erc_weights(returns: pd.DataFrame,
@@ -115,66 +98,31 @@ def erc_weights(returns: pd.DataFrame,
     On calcule la matrice de covariance sur les `window` dernières observations,
     puis on optimise séparément pour le côté long et le côté short.
 
-    Les tickers avec données manquantes dans la fenêtre de covariance sont
-    exclus de l'optimisation ERC et reçoivent un poids equal-weight.
-
     Returns : Series(ticker → weight), avec Σ long = +1 et Σ short = -1.
     """
+    all_tickers = long_list + short_list
+    sub = returns[all_tickers].dropna(axis=0, how="all")
+
     # Si pas assez de données → fallback equal weight
-    if len(returns) < max(window, 3):
+    if len(sub) < max(window, 3):
         return equal_weight(long_list, short_list)
+
+    # Covariance sur les dernières observations
+    cov = sub.iloc[-window:].cov()
 
     weights = {}
 
-    def _erc_side(ticker_list, sign=1.0):
-        """Calcule les poids ERC pour un côté (long ou short).
-        Exclut les tickers avec NaN dans la fenêtre, les remplace par EW."""
-        n_total = len(ticker_list)
-        if n_total == 0:
-            return
+    # Long
+    if long_list:
+        w_l = _erc_weights_long_only(cov, long_list)
+        for i, t in enumerate(long_list):
+            weights[t] = w_l[i]   # positif, somme = 1
 
-        # Fenêtre de rendements pour ce côté
-        sub = returns[ticker_list].iloc[-window:]
-
-        # Séparer : tickers avec données complètes vs tickers avec NaN
-        nan_counts = sub.isna().sum()
-        valid_tickers   = nan_counts[nan_counts == 0].index.tolist()
-        excluded_tickers = nan_counts[nan_counts > 0].index.tolist()
-
-        if len(valid_tickers) < 2:
-            # Pas assez de tickers propres → equal weight pour tous
-            w_ew = sign / n_total
-            for t in ticker_list:
-                weights[t] = w_ew
-            return
-
-        # Covariance propre (sans NaN)
-        cov = sub[valid_tickers].cov()
-
-        # ERC sur les tickers valides
-        w_erc = _erc_weights_long_only(cov, valid_tickers)
-
-        if not excluded_tickers:
-            # Tous valides : normaliser à |1|
-            for i, t in enumerate(valid_tickers):
-                weights[t] = sign * w_erc[i]
-        else:
-            # Mix : ERC pour les valides, EW pour les exclus
-            n_valid = len(valid_tickers)
-            n_excl = len(excluded_tickers)
-            share_erc = n_valid / n_total
-            share_ew = n_excl / n_total
-
-            for i, t in enumerate(valid_tickers):
-                weights[t] = sign * w_erc[i] * share_erc
-            w_ew_each = share_ew / n_excl
-            for t in excluded_tickers:
-                weights[t] = sign * w_ew_each
-
-    # Long : poids positifs, somme = +1
-    _erc_side(long_list, sign=1.0)
-    # Short : poids négatifs, somme = -1
-    _erc_side(short_list, sign=-1.0)
+    # Short
+    if short_list:
+        w_s = _erc_weights_long_only(cov, short_list)
+        for i, t in enumerate(short_list):
+            weights[t] = -w_s[i]  # négatif, somme = -1
 
     return pd.Series(weights)
 

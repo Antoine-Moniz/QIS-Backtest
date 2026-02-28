@@ -689,7 +689,6 @@ def export_all_results(all_results: dict, summary_df: pd.DataFrame,
 
             if rows:
                 portfolio_df = pd.DataFrame(rows)
-                # Nom de feuille : Ptf_signal_EW ou Ptf_signal_ERC
                 alloc_short = "EW" if alloc_method == "equal_weight" else "ERC"
                 sheet_name = f"Ptf_{signal_name}_{alloc_short}"[:31]
                 portfolio_df.to_excel(writer, sheet_name=sheet_name, index=False)
