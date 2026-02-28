@@ -99,6 +99,7 @@ def run_backtest(
     n_long_list   = []
     n_short_list  = []
     dates_used    = []
+    weights_history = {}   # date → weights (Series)
 
     nav          = 1.0
     nav_peak     = 1.0
@@ -241,6 +242,7 @@ def run_backtest(
         n_long_list.append(len(long_list))
         n_short_list.append(len(short_list))
         dates_used.append(date)
+        weights_history[date] = weights.copy()
 
         port_rets_so_far = pd.Series(pnl_list, index=dates_used)
         prev_weights = weights.copy()
@@ -264,6 +266,7 @@ def run_backtest(
         "final_weights": prev_weights,      # poids finaux
         "final_prices":  current_prices_row if len(rebal_dates) > 0 else pd.Series(dtype=float),
         "final_date":    dates_used[-1] if dates_used else None,
+        "weights_history": weights_history,   # date → weights à chaque rebalancement
     }
 
 

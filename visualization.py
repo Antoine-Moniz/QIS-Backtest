@@ -662,28 +662,38 @@ def export_all_results(all_results: dict, summary_df: pd.DataFrame,
                 df["Cost"]     = res["cost_log"]
             df.to_excel(writer, sheet_name=sheet)
 
-        # ── Feuille du portefeuille final (Equal Weight strategies) ──
-        # Créer une feuille par stratégie equal_weight
-        
+        # ── Feuilles du portefeuille à TOUTES les dates de rebalancement ──
         for key, res in all_results.items():
             signal_name, alloc_method, stoploss_type = key
-            
-            # Filtrer uniquement les stratégies equal_weight
+
+            # On exporte uniquement les stratégies equal_weight pour lisibilité
             if alloc_method != "equal_weight":
                 continue
-            
-            final_weights = res.get("final_weights", pd.Series(dtype=float))
-            final_date = res.get("final_date", None)
-            
-            if final_weights.empty:
+
+            weights_history = res.get("weights_history", {})
+            if not weights_history:
                 continue
-            
-            # Construire le DataFrame du portefeuille
-            portfolio_df = _build_portfolio_dataframe(final_weights, signal_name)
-            
-            if not portfolio_df.empty:
-                # Créer une feuille par stratégie
-                sheet_name = f"Portfolio_{signal_name}"[:31]  # max 31 chars pour Excel
+
+            # Construire un DataFrame récapitulatif : lignes = tickers, colonnes = dates
+            all_dates = sorted(weights_history.keys())
+            rows = []
+            for date in all_dates:
+                w = weights_history[date]
+                for ticker, weight in w.items():
+                    if pd.isna(weight) or weight == 0:
+                        continue
+                    side = "LONG" if weight > 0 else "SHORT"
+                    rows.append({
+                        "Date": date.strftime("%Y-%m-%d") if hasattr(date, "strftime") else str(date),
+                        "Ticker": ticker,
+                        "Side": side,
+                        "Weight": round(weight, 6),
+                        "Weight %": f"{weight * 100:.2f}%",
+                    })
+
+            if rows:
+                portfolio_df = pd.DataFrame(rows)
+                sheet_name = f"Ptf_{signal_name}"[:31]
                 portfolio_df.to_excel(writer, sheet_name=sheet_name, index=False)
 
     print(f"\n[OK] Resultats exportes dans {out_path}")
